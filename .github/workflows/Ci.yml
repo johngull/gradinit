@@ -27,7 +27,7 @@ jobs:
 
     - name: init
       run: |
-        pip install -U pytest torch
+        pip install -U pytest torch numpy torchvision
 
     - name: test
       run: |
