@@ -101,7 +101,7 @@ class GradInitWrapper:
             setattr(module, name, t.data)
             data = t.data.clone()
             if reinit_zeros and torch.allclose(
-                data, torch.tensor([0.0], device=data.device)
+                data, torch.tensor([0.0], device=data.device, dtype=data.dtype)
             ):
                 data = torch.randn_like(data) * reinit_std
             data.requires_grad = True
@@ -110,7 +110,7 @@ class GradInitWrapper:
             setattr(
                 module,
                 name + self._postfix_scale,
-                torch.nn.Parameter(torch.tensor(1.0, device=t.device)),
+                torch.nn.Parameter(torch.tensor(1.0, device=t.device, dtype=t.dtype)),
             )
             hook = module.register_forward_pre_hook(self._make_hook(name))
             self.hooks.append(hook)
@@ -125,7 +125,11 @@ class GradInitWrapper:
         return [getattr(module, name) for module, name in self.modules_parameter_names]
 
     def grad_loss(
-        self, loss: torch.Tensor, norm: int = 1, gamma: float = 1.0
+        self,
+        loss: torch.Tensor,
+        norm: int = 1,
+        gamma: float = 1.0,
+        scaler: typing.Optional[torch.cuda.amp.GradScaler] = None,
     ) -> torch.Tensor:
         """
         Calculate loss for the parameters scaling optimization.
@@ -136,15 +140,37 @@ class GradInitWrapper:
         :param scaler: torch amp GradScaler used in your train loop for mixed-precision
         :return: (torch.Tensor) loss value
         """
-        all_grads = torch.autograd.grad(
-            loss, self._combined_parameters(), create_graph=True, allow_unused=True
-        )
-        all_grads = list(filter(lambda x: x is not None, all_grads))
-        gnorm = (
-            torch.stack([g.abs().pow(norm).sum() for g in all_grads])
-            .sum()
-            .pow(1.0 / norm)
-        )
+
+        if scaler:
+            all_grads = torch.autograd.grad(
+                scaler.scale(loss),
+                self._combined_parameters(),
+                create_graph=True,
+                allow_unused=True,
+            )
+            all_grads = list(
+                filter(
+                    lambda x: x is not None and torch.all(torch.isfinite(x)), all_grads
+                )
+            )
+            inv_scale = 1.0 / scaler.get_scale()
+            all_grads = [p * inv_scale for p in all_grads]
+            with torch.cuda.amp.autocast():
+                gnorm = (
+                    torch.stack([g.abs().pow(norm).sum() for g in all_grads])
+                    .sum()
+                    .pow(1.0 / norm)
+                )
+        else:
+            all_grads = torch.autograd.grad(
+                loss, self._combined_parameters(), create_graph=True, allow_unused=True
+            )
+            all_grads = list(filter(lambda x: x is not None, all_grads))
+            gnorm = (
+                torch.stack([g.abs().pow(norm).sum() for g in all_grads])
+                .sum()
+                .pow(1.0 / norm)
+            )
 
         if gnorm > gamma:
             return gnorm

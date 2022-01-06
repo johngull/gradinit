@@ -22,6 +22,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--workers", type=int, default=5)
+    parser.add_argument(
+        "--mixed_precision", dest="mixed_precision", action="store_true"
+    )
     parser.add_argument("--optimizer", type=str, default="sgd")
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--sgd_momentum", type=float, default=0.9)
@@ -101,11 +104,14 @@ def create_model(
     return models.__dict__[model_name](pretrained=pretrained, num_classes=classes_count)
 
 
-def get_device() -> torch.device:
+def get_device(
+    mixed_precision: bool,
+) -> typing.Tuple[torch.device, typing.Optional[torch.cuda.amp.GradScaler]]:
     if torch.cuda.is_available():
-        return torch.device("cuda")
+        scaler = torch.cuda.amp.GradScaler() if mixed_precision else None
+        return torch.device("cuda"), scaler
 
-    return torch.device("cpu")
+    return torch.device("cpu"), None
 
 
 def get_optimizer(
@@ -131,6 +137,7 @@ def get_optimizer(
 def train_epoch(
     model: torch.nn.Module,
     device: torch.device,
+    scaler: typing.Optional[torch.cuda.amp.GradScaler],
     dl: DataLoader,
     optimizer: torch.optim.Optimizer,
 ) -> float:
@@ -140,12 +147,22 @@ def train_epoch(
     for images, targets in epoch_progress:
         images = images.to(device)
         targets = targets.to(device)
-        pred = model(images)
-        loss = torch.nn.functional.cross_entropy(pred, targets)
+        if scaler:
+            with torch.cuda.amp.autocast():
+                pred = model(images)
+                loss = torch.nn.functional.cross_entropy(pred, targets)
+        else:
+            pred = model(images)
+            loss = torch.nn.functional.cross_entropy(pred, targets)
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        if scaler:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
         sum_loss += loss.item()
         it += 1
@@ -155,7 +172,10 @@ def train_epoch(
 
 
 def validate_epoch(
-    model: torch.nn.Module, device: torch.device, dl: DataLoader
+    model: torch.nn.Module,
+    device: torch.device,
+    scaler: typing.Optional[torch.cuda.amp.GradScaler],
+    dl: DataLoader,
 ) -> typing.Tuple[float, float]:
     model.eval()
     epoch_progress = tqdm(dl)
@@ -167,8 +187,13 @@ def validate_epoch(
         images = images.to(device)
         targets = targets.to(device)
         with torch.no_grad():
-            pred = model(images)
-            loss = torch.nn.functional.cross_entropy(pred, targets)
+            if scaler:
+                with torch.cuda.amp.autocast():
+                    pred = model(images)
+                    loss = torch.nn.functional.cross_entropy(pred, targets)
+            else:
+                pred = model(images)
+                loss = torch.nn.functional.cross_entropy(pred, targets)
             correct += (torch.argmax(pred, dim=1) == targets).sum().item()
 
         sum_loss += loss.item()
@@ -184,6 +209,7 @@ def validate_epoch(
 def train_model(
     model: torch.nn.Module,
     device: torch.device,
+    scaler: typing.Optional[torch.cuda.amp.GradScaler],
     train_dl: DataLoader,
     val_dl: DataLoader,
     optimizer: torch.optim.Optimizer,
@@ -198,8 +224,8 @@ def train_model(
 
     epochs_progress = tqdm(range(epochs), desc="Epoch 0")
     for epoch in epochs_progress:
-        train_loss = train_epoch(model, device, train_dl, optimizer)
-        val_loss, val_acc = validate_epoch(model, device, val_dl)
+        train_loss = train_epoch(model, device, scaler, train_dl, optimizer)
+        val_loss, val_acc = validate_epoch(model, device, scaler, val_dl)
 
         epochs_progress.set_description(
             f"Epoch {epoch}. Loss={train_loss : .5f}. Val_loss={val_loss: .5f}. Val_acc={val_acc: .3f}"
@@ -215,6 +241,7 @@ def train_model(
 def grad_init(
     model: torch.nn.Module,
     device: torch.device,
+    scaler: typing.Optional[torch.cuda.amp.GradScaler],
     dl: DataLoader,
     args: argparse.Namespace,
 ) -> float:
@@ -230,16 +257,31 @@ def grad_init(
         for images, targets in epoch_progress:
             images = images.to(device)
             targets = targets.to(device)
-            pred = model(images)
-            loss = torch.nn.functional.cross_entropy(pred, targets)
-            sum_loss += loss.item()
 
-            # recalculate gradinit loss based on your loss
-            loss = ginit.grad_loss(loss, norm)
+            if scaler:
+                with torch.cuda.amp.autocast():
+                    pred = model(images)
+                    loss = torch.nn.functional.cross_entropy(pred, targets)
+                sum_loss += loss.item()
+
+                # recalculate gradinit loss based on your loss
+                loss = ginit.grad_loss(loss, norm, scaler=scaler)
+            else:
+                pred = model(images)
+                loss = torch.nn.functional.cross_entropy(pred, targets)
+                sum_loss += loss.item()
+
+                # recalculate gradinit loss based on your loss
+                loss = ginit.grad_loss(loss, norm)
 
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            if scaler:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
 
             # clip minimum values for the init scales
             ginit.clamp_scales()
@@ -262,13 +304,13 @@ def run_experiment(args: argparse.Namespace):
         args.dataset, args.dataset_save_path, args.batch_size, args.workers
     )
     model = create_model(args.model, args.model_pretrained, classes_count)
-    device = get_device()
+    device, scaler = get_device(args.mixed_precision)
     model.to(device)
 
     logs = None
     if args.grad_init:
-        ginit_loss = grad_init(model, device, train_dl, args)
-        val_loss, val_acc = validate_epoch(model, device, test_dl)
+        ginit_loss = grad_init(model, device, None, train_dl, args)
+        val_loss, val_acc = validate_epoch(model, device, scaler, test_dl)
         logs = {
             "loss": [ginit_loss],
             "val_loss": [val_loss],
@@ -278,7 +320,7 @@ def run_experiment(args: argparse.Namespace):
 
     train_optim = get_optimizer(args, model)
     logs = train_model(
-        model, device, train_dl, test_dl, train_optim, args.epochs, logs=logs
+        model, device, scaler, train_dl, test_dl, train_optim, args.epochs, logs=logs
     )
 
     save_logs(logs, args.experiment_csv_log)

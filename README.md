@@ -70,3 +70,48 @@ optimizer = torch.optim.Adam(model.parameters())
 ...
 
 ```
+
+From our experience gradinit works worse in the mixed-precision mode. 
+And we recommend running gradinit in the full-precision mode and then starting the main training loop in mixed-precision.
+
+But if you really want to try, gradinit supports torch mixed-precision.
+In such a case gradinit need to use your scaler object.
+Here is an example of how to use gradinit with the torch amp.
+```python
+import torch.cuda.amp
+
+model: torch.nn.Module = ...
+scaler: torch.cuda.amp.GradScaler = ...
+
+with GradInitWrapper(model) as ginit:
+    # it is important to create optimizer after wraping your model
+    optimizer = torch.optim.Adam(model.parameters())
+    norm = 1  # use 2 for the SGD optimizer
+
+    model.train()
+    for x, y in data_loader:
+        with autocast():
+            pred = model(x)
+            loss = criterion(pred, y)
+
+        # recalculate gradinit loss based on your loss
+        loss = ginit.grad_loss(loss, norm, scaler=scaler)
+
+        optimizer.zero_grad()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+        # clip minimum values for the init scales
+        ginit.clamp_scales()
+
+# on exit of with statement model is recovered to its normal way
+# here you should create your main optimizer and start training
+optimizer = torch.optim.Adam(model.parameters())
+...
+
+```
+
+## Experiments
+
+For the experiment results see [this page](experiments/)
