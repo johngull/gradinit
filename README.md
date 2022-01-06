@@ -4,6 +4,7 @@ Pytorch-based library to initialize any neural network with the gradient descent
 This implementation is the simple way to use the method described in the paper [Chen Zhu et al. GradInit: Learning to Initialize Neural Networks for Stable and Efficient Training](https://arxiv.org/abs/2102.08098)
 
 Gradinit may be used as the alternative to the warmup mechanism.
+It is more useful for deep or unusual architectures.
 
 ## Installation
 
