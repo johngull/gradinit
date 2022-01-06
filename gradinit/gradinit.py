@@ -28,7 +28,7 @@ class GradInitWrapper:
     """
     Wrapper for the PyTorch model for gradient initialization.
     This wrapper change model parameters and recover model structure after wrapper detachment (including wrapper deleting).
-    For later optimization of the model it is important to create optimizer after detaching GradInitWrapper.
+    For later optimization of the model, it is important to create an optimizer after detaching GradInitWrapper.
 
     :param module: (torch.nn.Module) torch module to initialize
     :param reinit_zeros: (bool) if True, fully zero parameters, like bias will be reinitialized with the normal distribution
@@ -117,7 +117,7 @@ class GradInitWrapper:
 
     def _combined_parameters(self) -> typing.List[torch.Tensor]:
         """
-        Collect list of the rescaled parameters tensors. Used for calculatign gradinit loss
+        Collect a list of the rescaled parameters tensors. Used for calculating gradinit loss
 
         :return: (List[torch.Tensor]) list of the rescaled parameters tensors
         """
@@ -133,6 +133,7 @@ class GradInitWrapper:
         :param loss: (torch.Tensor) original task loss
         :param norm: (int) order of norm to use for loss calculation. Use 1 for Adam and 2 for SGD
         :param gamma: (float) minimal threshold to use special init loss
+        :param scaler: torch amp GradScaler used in your train loop for mixed-precision
         :return: (torch.Tensor) loss value
         """
         all_grads = torch.autograd.grad(
@@ -152,7 +153,7 @@ class GradInitWrapper:
 
     def clamp_scales(self, min_scale: float = 0.01):
         """
-        Clamp parameters scales to prevent zeroing of the parameters
+        Clamp parameters scale to prevent zeroing of the parameters
 
         :param min_scale: lower threshold for the scaling factors
         """
