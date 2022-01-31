@@ -114,4 +114,4 @@ optimizer = torch.optim.Adam(model.parameters())
 
 ## Experiments
 
-For the experiment results see [this page](experiments/)
+For the experiment results see [this page](https://github.com/johngull/gradinit/tree/main/experiments)

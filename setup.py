@@ -1,6 +1,4 @@
-from distutils.core import setup
-
-readme = open('README.md').read()
+from setuptools import setup
 
 VERSION = '0.1.0'
 
@@ -12,12 +10,11 @@ setup(
     name='gradinit',
     version=VERSION,
     packages=['gradinit'],
+    url='https://github.com/johngull/gradinit',
     author='Vitaly Bondar',
     author_email='johngull@gmail.com',
     license='MIT',
     description='Pytorch implementation of the gradient-based initialization',
-    long_description=readme,
-    long_description_content_type='text/markdown',
 
     install_requires=requirements,
 )
