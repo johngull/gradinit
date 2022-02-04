@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torchvision
 from torchvision.models import vgg11, resnet18, efficientnet_b0, regnet_x_8gf
 from gradinit import GradInitWrapper
 
@@ -124,5 +125,21 @@ def test_only_scale_changes_on_gradinit():
         _compare_two_parameters_dict_scaled(params, new_params)
 
 
+def test_unused_submodule():
+    class UnusedBN(torchvision.models.resnet.ResNet):
+        def __init__(self):
+            super().__init__(torchvision.models.resnet.BasicBlock, [2, 2, 2, 2])
+            self.unused_bn = torch.nn.BatchNorm2d(10)
+
+    model = UnusedBN()
+    params = _copy_module_parameters(model)
+    _random_image_classification_gradinit(model)
+    new_params = _copy_module_parameters(model)
+    _compare_two_parameters_dict_scaled(params, new_params)
+
+
 if __name__ == "__main__":
     test_no_changes_on_wrap_detach()
+    test_no_changes_on_with_wrap()
+    test_only_scale_changes_on_gradinit()
+    test_unused_submodule()

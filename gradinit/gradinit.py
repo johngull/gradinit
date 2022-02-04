@@ -122,7 +122,11 @@ class GradInitWrapper:
         :return: (List[torch.Tensor]) list of the rescaled parameters tensors
         """
 
-        return [getattr(module, name) for module, name in self.modules_parameter_names]
+        return [
+            getattr(module, name)
+            for module, name in self.modules_parameter_names
+            if getattr(module, name).requires_grad
+        ]
 
     def grad_loss(
         self,
